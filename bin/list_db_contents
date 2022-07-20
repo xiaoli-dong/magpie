@@ -1,0 +1,10 @@
+#!/usr/local/bin/perl
+
+#use DB_File;
+use GDBM_File;
+use Fcntl;
+
+tie(%db, "GDBM_File", $ARGV[0], O_RDONLY, 0644) or die "Cannot open database: $!\n";
+while(($key, $value) = each %db){
+  print "$key\t", $value, "\n";
+}

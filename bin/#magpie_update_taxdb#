@@ -1,0 +1,102 @@
+#!/usr/bin/perl
+BEGIN{
+     $ENV{'MAGPIEHOME'}
+         or die "MAGPIEHOME is not defined environment variable\n";
+        push @INC, $ENV{'MAGPIEHOME'}."/lib";
+     }
+
+use Taxonomy;
+use Conf;
+use SiteCfg;
+use Net::FTP;
+use Net::Config qw(%NetConfig);
+use strict;
+
+my $download = 1;
+if(@ARGV == 1){
+  $download = 0;
+}
+
+my ($host, $dir) = qw(ftp.ncbi.nih.gov /pub/taxonomy);
+my @files = qw(gi_taxid_nucl.dmp.gz gi_taxid_prot.dmp.gz taxdump.tar.gz);
+
+my $www_config = Conf::www_config();
+
+if($download){
+my %ftp_args = {Debug => 0};
+if($NetConfig{ftp_firewall}){
+  $ftp_args{Firewall} = $NetConfig{ftp_firewall};
+}
+if($NetConfig{ftp_firewall_type}){
+  $ftp_args{FirewallType} = $NetConfig{ftp_firewall_type};
+}
+if($NetConfig{ftp_ext_passive} or $NetConfig{ftp_int_passive}){
+  $ftp_args{Passive} = 1;
+}
+
+my $localdir = Taxonomy::TaxFileDir();
+chdir $localdir
+  or die "Cannot change current directory to $localdir: $!\n";
+
+my ($file, %pid_to_file);
+foreach $file (@files){
+  FORK:{
+  if(my $pid = fork()){
+    #Parent
+    $pid_to_file{$pid} = $file;
+  }
+  elsif(defined $pid){
+    # Child
+    my $ftp = new Net::FTP($host, %ftp_args);
+    print STDERR "Logging in to $host...\n";
+    $ftp->login("anonymous",'-magpie@'.$www_config->{hostname});
+    $ftp->binary;
+    print STDERR "Changing to remote directory $dir...\n";
+    $ftp->cwd($dir);
+
+    print "Fetching remote file $file...\n";
+    $ftp->get($file, "$localdir/$file");
+    $ftp->quit;
+
+    #Unzip if need be
+    if($file =~ /\.(t)?gz$/){
+      if($1){  #Need to change extension from tgz to gz for gzip to work
+        my $oldfile = $file;
+        $file =~ s/tgz$/tar.gz/;
+        print STDERR "Renaming $oldfile to $file...\n";
+        rename $oldfile, $file;
+      }
+      print "Uncompressing $file...\n";
+      system ($SiteCfg::gzip." -df $localdir/$file") >> 8
+        and die "Cannot uncompress $localdir/$file with ", $SiteCfg::gzip,
+              ": return status was ", $?>>8, "\n";
+    }
+    #Untar if need be
+    if($file =~ s/\.tar\.gz$/.tar/){
+      print "Extracting archive from $file ...\n";
+      system ($SiteCfg::tar." xvf $localdir/$file") >> 8
+        and die "Cannot extract archive in $localdir/$file derivative with ", $SiteCfg::tar,
+              ": return status was ", $?>>8, "\n";
+    }
+    exit;  #No more for child to do
+  }
+  elsif($! =~ /No more processes/){
+    sleep 5;
+    redo FORK;
+  }
+  else{
+    die "Cannot fork process: $!\n";
+  }
+  }  # END FORK BLOCK
+}
+while(shift @files){  # Count down each file's thread
+  my $pid = wait();
+  print STDERR "Transaction done for ", $pid_to_file{$pid}, ".\n";
+}
+} # end if download
+
+print STDERR "Updating Magpie indices...";
+if(not Taxonomy::updateTaxonomyIndices()){
+  die "Taxonomy database index update failed!\n";
+}
+print  "done\n";

@@ -1,0 +1,6 @@
+maildir:/var/mail
+hrefbase:/magpie
+httpbasedir:/export/data/web/magpie
+cgi-bin:/cgi-bin/magpie
+host:port
+projects:/magpie/private/
